@@ -64,16 +64,17 @@ class LassoVisualizer:
             # Get coefficient history
             coef_history = np.array(model.coef_history_)  # Shape: (n_iter, n_features)
             
-            # Select top-k features by final absolute coefficient value
-            final_coefs = np.abs(coef_history[-1])
-            top_indices = np.argsort(final_coefs)[-top_k:]
+            # Select top-k features by peak absolute value across the whole trajectory.
+            # This avoids selecting only near-zero lines at the final iteration.
+            peak_coefs = np.max(np.abs(coef_history), axis=0)
+            top_indices = np.argsort(peak_coefs)[-top_k:]
             
             # Plot each feature's trajectory
             iterations = np.arange(len(coef_history))
             for feat_idx in top_indices:
                 trajectory = coef_history[:, feat_idx]
                 
-                # Color by final value (positive=blue, negative=red, zero=gray)
+                # Color by final value (positive=blue, negative=red, near-zero=gray)
                 final_val = coef_history[-1, feat_idx]
                 if abs(final_val) < 1e-6:
                     color = 'gray'
@@ -278,8 +279,16 @@ class LassoVisualizer:
             print("⚠ No correlated pairs to analyze")
             return
         
-        # Take top 5 correlated pairs
-        top_pairs = sorted(correlated_pairs, key=lambda x: x['correlation'], reverse=True)[:5]
+        # Take top correlated pairs that are actually present in feature_names
+        candidate_pairs = sorted(correlated_pairs, key=lambda x: x['correlation'], reverse=True)
+        top_pairs = [
+            p for p in candidate_pairs
+            if p['feature_1'] in feature_names and p['feature_2'] in feature_names
+        ][:5]
+
+        if len(top_pairs) == 0:
+            print("⚠ No valid correlated pairs found in encoded feature set")
+            return
         
         n_pairs = len(top_pairs)
         n_models = len(models_dict)
@@ -297,25 +306,32 @@ class LassoVisualizer:
             corr = pair['correlation']
             
             # Get indices
-            try:
-                idx1 = feature_names.index(feat1)
-                idx2 = feature_names.index(feat2)
-            except ValueError:
-                continue
+            idx1 = feature_names.index(feat1)
+            idx2 = feature_names.index(feat2)
             
             for model_idx, (model_name, model) in enumerate(models_dict.items()):
                 ax = axes[pair_idx, model_idx]
-                
+
                 coef1 = model.coef_[idx1]
                 coef2 = model.coef_[idx2]
-                
+
                 # Bar plot
-                ax.bar([feat1[:20], feat2[:20]], [coef1, coef2], 
-                      color=['blue', 'orange'], alpha=0.7)
+                vals = [coef1, coef2]
+                ax.bar([feat1[:20], feat2[:20]], vals,
+                       color=['blue', 'orange'], alpha=0.7)
                 ax.axhline(y=0, color='black', linewidth=0.8)
                 ax.set_ylabel('Coefficient Value')
                 ax.set_title(f'{model_name}\nρ = {corr:.3f}')
                 ax.grid(True, alpha=0.3, axis='y')
+
+                # Avoid visually empty subplots when coefficients are tiny
+                max_abs = max(abs(coef1), abs(coef2), 1e-4)
+                ax.set_ylim(-1.25 * max_abs, 1.25 * max_abs)
+
+                # Show numeric values directly on bars
+                for x_i, v in enumerate(vals):
+                    ax.text(x_i, v, f"{v:.3e}", ha='center',
+                            va='bottom' if v >= 0 else 'top', fontsize=8)
                 
                 # Annotate which feature was selected
                 if abs(coef1) > 1e-6 and abs(coef2) < 1e-6:
