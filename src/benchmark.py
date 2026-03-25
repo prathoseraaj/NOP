@@ -121,6 +121,7 @@ class BenchmarkSuite:
             max_iter=1500,
             learning_rate=0.01,
             tol=1e-6,
+            use_lipschitz_step=True,
             verbose=True
         )
         model.fit(X_train, y_train)
@@ -138,6 +139,7 @@ class BenchmarkSuite:
             max_iter=1500,
             learning_rate=0.01,
             tol=1e-6,
+            use_lipschitz_step=True,
             verbose=True
         )
         model.fit(X_train, y_train)

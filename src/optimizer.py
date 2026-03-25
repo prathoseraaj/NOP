@@ -77,8 +77,9 @@ class AdaptiveLassoOptimizer:
     the subdifferential of the L1 penalty at the current iterate.
     """
     
-    def __init__(self, lambda_0=1.0, alpha=0.05, max_iter=1000, 
-                 tol=1e-6, learning_rate=0.01, verbose=True):
+    def __init__(self, lambda_0=1.0, alpha=0.05, max_iter=1000,
+                 tol=1e-6, learning_rate=0.01, use_lipschitz_step=False,
+                 verbose=True):
         """
         Initialize the Adaptive LASSO optimizer.
         
@@ -94,6 +95,8 @@ class AdaptiveLassoOptimizer:
             Convergence tolerance (change in coefficients)
         learning_rate : float
             Step size for gradient descent
+        use_lipschitz_step : bool
+            If True, compute step size as 1/L where L = ||X^T X||_2 / n
         verbose : bool
             Print progress information
         """
@@ -102,6 +105,7 @@ class AdaptiveLassoOptimizer:
         self.max_iter = max_iter
         self.tol = tol
         self.learning_rate = learning_rate
+        self.use_lipschitz_step = use_lipschitz_step
         self.verbose = verbose
         
         # Storage for tracking
@@ -138,12 +142,13 @@ class AdaptiveLassoOptimizer:
         l1_term = self.lambda_history_[-1] * np.sum(np.abs(beta))
         return mse_term + l1_term
     
-    def _update_lambda(self, beta):
+    def _update_lambda(self, beta, lambda_prev, iteration, n_features):
         """
         Update λ using the cooling schedule.
         
-        Mathematical formulation:
-        λ_{t+1} = λ_0 · exp(-α · ||∂||β_t||_1||)
+        Mathematical formulation (iterative cooling with annealing):
+        λ_{t+1} = λ_t · exp(-α · ||∂||β_t||_1|| / (sqrt(p)·(t+1)))
+        where p is the number of features.
         
         Intuition:
         - When ||∂||β||_1|| is large (many non-zero coefficients changing),
@@ -158,10 +163,21 @@ class AdaptiveLassoOptimizer:
             
         Returns:
         --------
-        float : Updated λ value
+        lambda_prev : float
+            Previous λ value (at iteration t)
+        iteration : int
+            Current iteration index (0-based)
+        n_features : int
+            Number of features
+
+        Returns:
+        --------
+        float : Updated λ value (at iteration t+1)
         """
         subdiff_norm = ProximalOperators.compute_subdifferential_norm(beta)
-        lambda_new = self.lambda_0 * np.exp(-self.alpha * subdiff_norm)
+        scaled_norm = subdiff_norm / max(np.sqrt(n_features), 1e-12)
+        anneal = 1.0 / (iteration + 1)
+        lambda_new = lambda_prev * np.exp(-self.alpha * scaled_norm * anneal)
         
         # Ensure λ doesn't become too small (numerical stability)
         lambda_new = max(lambda_new, 1e-6)
@@ -195,11 +211,26 @@ class AdaptiveLassoOptimizer:
             Fitted model
         """
         n_samples, n_features = X.shape
+
+        # Reset tracking (important when re-fitting the same instance)
+        self.lambda_history_ = []
+        self.coef_history_ = []
+        self.loss_history_ = []
+        self.sparsity_history_ = []
+        self.n_iter_ = 0
         
         # Handle intercept by centering the target
         self.intercept_ = np.mean(y)
         y_centered = y - self.intercept_
         
+        # Learning rate (optional Lipschitz step size)
+        if self.use_lipschitz_step:
+            spectral_norm = np.linalg.norm(X, ord=2)
+            L = (spectral_norm ** 2) / n_samples
+            lr = 1.0 / max(L, 1e-12)
+        else:
+            lr = self.learning_rate
+
         # Initialize coefficients
         beta = np.zeros(n_features)
         lambda_t = self.lambda_0
@@ -210,7 +241,7 @@ class AdaptiveLassoOptimizer:
             print("=" * 80)
             print(f"Initial λ: {self.lambda_0:.6f}")
             print(f"Cooling rate α: {self.alpha:.6f}")
-            print(f"Learning rate: {self.learning_rate:.6f}")
+            print(f"Learning rate: {lr:.6f}")
             print(f"Max iterations: {self.max_iter}")
             print("-" * 80)
         
@@ -241,11 +272,11 @@ class AdaptiveLassoOptimizer:
             gradient = -(1 / n_samples) * (X.T @ residuals)
             
             # Gradient descent step
-            beta_tilde = beta - self.learning_rate * gradient
+            beta_tilde = beta - lr * gradient
             
             # Proximal operator (soft-thresholding)
-            beta_new = ProximalOperators.soft_threshold(beta_tilde, 
-                                                        self.learning_rate * lambda_t)
+            beta_new = ProximalOperators.soft_threshold(beta_tilde,
+                                                        lr * lambda_t)
             
             # Check convergence
             coef_change = np.linalg.norm(beta_new - beta)
@@ -257,7 +288,7 @@ class AdaptiveLassoOptimizer:
                 break
             
             # Update λ using cooling schedule
-            lambda_t = self._update_lambda(beta_new)
+            lambda_t = self._update_lambda(beta_new, lambda_t, iteration, n_features)
             
             # Update coefficients
             beta = beta_new
@@ -337,28 +368,44 @@ class AdaptiveLassoOptimizer:
 class StandardLasso:
     """Standard LASSO with fixed λ for comparison."""
     
-    def __init__(self, lambda_val=0.1, max_iter=1000, learning_rate=0.01, 
-                 tol=1e-6, verbose=True):
+    def __init__(self, lambda_val=0.1, max_iter=1000, learning_rate=0.01,
+                 tol=1e-6, use_lipschitz_step=False, verbose=True):
         self.lambda_val = lambda_val
         self.max_iter = max_iter
         self.learning_rate = learning_rate
         self.tol = tol
+        self.use_lipschitz_step = use_lipschitz_step
         self.verbose = verbose
         
         self.coef_ = None
         self.intercept_ = 0.0
         self.loss_history_ = []
         self.coef_history_ = []
+        self.sparsity_history_ = []
         self.n_iter_ = 0
     
     def fit(self, X, y):
         """Fit standard LASSO with fixed λ."""
         n_samples, n_features = X.shape
+
+        # Reset tracking (important when re-fitting the same instance)
+        self.loss_history_ = []
+        self.coef_history_ = []
+        self.sparsity_history_ = []
+        self.n_iter_ = 0
         
         # Handle intercept by centering the target
         self.intercept_ = np.mean(y)
         y_centered = y - self.intercept_
         
+        # Learning rate (optional Lipschitz step size)
+        if self.use_lipschitz_step:
+            spectral_norm = np.linalg.norm(X, ord=2)
+            L = (spectral_norm ** 2) / n_samples
+            lr = 1.0 / max(L, 1e-12)
+        else:
+            lr = self.learning_rate
+
         beta = np.zeros(n_features)
         
         if self.verbose:
@@ -366,6 +413,7 @@ class StandardLasso:
             print("STANDARD LASSO OPTIMIZATION")
             print("=" * 80)
             print(f"Fixed λ: {self.lambda_val:.6f}")
+            print(f"Learning rate: {lr:.6f}")
             print("-" * 80)
         
         iterator = tqdm(range(self.max_iter), disable=not self.verbose)
@@ -380,6 +428,7 @@ class StandardLasso:
             self.loss_history_.append(loss)
             
             sparsity = 100 * np.mean(np.abs(beta) < 1e-6)
+            self.sparsity_history_.append(sparsity)
             
             if self.verbose:
                 iterator.set_description(
@@ -388,9 +437,9 @@ class StandardLasso:
             
             # Gradient descent + proximal step
             gradient = -(1 / n_samples) * (X.T @ residuals)
-            beta_tilde = beta - self.learning_rate * gradient
-            beta_new = ProximalOperators.soft_threshold(beta_tilde, 
-                                                        self.learning_rate * self.lambda_val)
+            beta_tilde = beta - lr * gradient
+            beta_new = ProximalOperators.soft_threshold(beta_tilde,
+                                                        lr * self.lambda_val)
             
             # Check convergence
             if np.linalg.norm(beta_new - beta) < self.tol:
