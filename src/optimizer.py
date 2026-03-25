@@ -8,56 +8,16 @@ from tqdm import tqdm
 
 
 class ProximalOperators:
-    """
-    Mathematical core: Proximal operators for sparse optimization.
-    """
+
     
     @staticmethod
     def soft_threshold(x, lambda_val):
-        """
-        Soft-thresholding operator (proximal operator for L1 norm).
-        
-        Mathematical formulation:
-        prox_λ(x) = sign(x) · max(|x| - λ, 0)
-        
-        This is the subdifferential of the L1 penalty:
-        ∂||x||_1 = sign(x) if x ≠ 0, [-1, 1] if x = 0
-        
-        Parameters:
-        -----------
-        x : array
-            Input vector
-        lambda_val : float
-            Threshold parameter
-            
-        Returns:
-        --------
-        array : Thresholded vector
-        """
+       
         return np.sign(x) * np.maximum(np.abs(x) - lambda_val, 0)
     
     @staticmethod
     def compute_subdifferential_norm(beta, epsilon=1e-10):
-        """
-        Compute the norm of the subdifferential of ||β||_1.
-        
-        For β_i ≠ 0: ∂||β||_1 / ∂β_i = sign(β_i)
-        For β_i = 0: ∂||β||_1 / ∂β_i ∈ [-1, 1]
-        
-        We use the gradient magnitude as a proxy for convergence:
-        ||∇||β||_1|| ≈ ||sign(β)||_2 for non-zero components
-        
-        Parameters:
-        -----------
-        beta : array
-            Current coefficient vector
-        epsilon : float
-            Small constant to avoid division by zero
-            
-        Returns:
-        --------
-        float : Norm of subdifferential
-        """
+
         # For non-zero components, subdifferential is sign(beta)
         # For zero components, we use 0 (interior of subdifferential set)
         nonzero_mask = np.abs(beta) > epsilon
@@ -68,38 +28,12 @@ class ProximalOperators:
 
 
 class AdaptiveLassoOptimizer:
-    """
-    Adaptive LASSO with Dynamic Soft-Thresholding.
-    
-    Solves: min_β (1/2n)||y - Xβ||² + λ_t||β||_1
-    
-    Key Innovation: λ_t evolves according to a cooling schedule based on
-    the subdifferential of the L1 penalty at the current iterate.
-    """
+
     
     def __init__(self, lambda_0=1.0, alpha=0.05, max_iter=1000,
                  tol=1e-6, learning_rate=0.01, use_lipschitz_step=False,
                  verbose=True):
-        """
-        Initialize the Adaptive LASSO optimizer.
-        
-        Parameters:
-        -----------
-        lambda_0 : float
-            Initial regularization parameter (high for aggressive pruning)
-        alpha : float
-            Cooling rate for λ schedule (controls adaptation speed)
-        max_iter : int
-            Maximum number of iterations
-        tol : float
-            Convergence tolerance (change in coefficients)
-        learning_rate : float
-            Step size for gradient descent
-        use_lipschitz_step : bool
-            If True, compute step size as 1/L where L = ||X^T X||_2 / n
-        verbose : bool
-            Print progress information
-        """
+
         self.lambda_0 = lambda_0
         self.alpha = alpha
         self.max_iter = max_iter
@@ -118,24 +52,7 @@ class AdaptiveLassoOptimizer:
         self.sparsity_history_ = []
         
     def _compute_loss(self, X, y, beta):
-        """
-        Compute the LASSO objective function.
-        
-        L(β) = (1/2n)||y - Xβ||² + λ||β||_1
-        
-        Parameters:
-        -----------
-        X : array, shape (n_samples, n_features)
-            Design matrix
-        y : array, shape (n_samples,)
-            Target values
-        beta : array, shape (n_features,)
-            Coefficient vector
-            
-        Returns:
-        --------
-        float : Loss value
-        """
+    
         n = X.shape[0]
         residuals = y - X @ beta
         mse_term = (0.5 / n) * np.sum(residuals ** 2)
@@ -143,37 +60,7 @@ class AdaptiveLassoOptimizer:
         return mse_term + l1_term
     
     def _update_lambda(self, beta, lambda_prev, iteration, n_features):
-        """
-        Update λ using the cooling schedule.
         
-        Mathematical formulation (iterative cooling with annealing):
-        λ_{t+1} = λ_t · exp(-α · ||∂||β_t||_1|| / (sqrt(p)·(t+1)))
-        where p is the number of features.
-        
-        Intuition:
-        - When ||∂||β||_1|| is large (many non-zero coefficients changing),
-          λ decreases slowly (aggressive pruning continues)
-        - When ||∂||β||_1|| is small (coefficients stabilizing),
-          λ decreases faster (fine-tuning phase begins)
-        
-        Parameters:
-        -----------
-        beta : array
-            Current coefficient vector
-            
-        Returns:
-        --------
-        lambda_prev : float
-            Previous λ value (at iteration t)
-        iteration : int
-            Current iteration index (0-based)
-        n_features : int
-            Number of features
-
-        Returns:
-        --------
-        float : Updated λ value (at iteration t+1)
-        """
         subdiff_norm = ProximalOperators.compute_subdifferential_norm(beta)
         scaled_norm = subdiff_norm / max(np.sqrt(n_features), 1e-12)
         anneal = 1.0 / (iteration + 1)
@@ -185,31 +72,7 @@ class AdaptiveLassoOptimizer:
         return lambda_new
     
     def fit(self, X, y):
-        """
-        Fit the Adaptive LASSO model using proximal gradient descent.
         
-        Algorithm:
-        ----------
-        1. Initialize β = 0, λ = λ_0
-        2. For t = 1 to max_iter:
-            a. Compute gradient: ∇f(β) = -(1/n)X^T(y - Xβ)
-            b. Gradient step: β̃ = β - η∇f(β)
-            c. Proximal step: β = prox_λ(β̃) = soft_threshold(β̃, λ)
-            d. Update λ using cooling schedule
-        3. Return β
-        
-        Parameters:
-        -----------
-        X : array, shape (n_samples, n_features)
-            Training data
-        y : array, shape (n_samples,)
-            Target values
-            
-        Returns:
-        --------
-        self : AdaptiveLassoOptimizer
-            Fitted model
-        """
         n_samples, n_features = X.shape
 
         # Reset tracking (important when re-fitting the same instance)
@@ -319,35 +182,13 @@ class AdaptiveLassoOptimizer:
         return self
     
     def predict(self, X):
-        """
-        Make predictions using the fitted model.
         
-        Parameters:
-        -----------
-        X : array, shape (n_samples, n_features)
-            Test data
-            
-        Returns:
-        --------
-        array : Predictions
-        """
         if self.coef_ is None:
             raise ValueError("Model not fitted yet. Call fit() first.")
         return X @ self.coef_ + self.intercept_
     
     def get_feature_importance(self, feature_names=None):
-        """
-        Get feature importance based on absolute coefficient values.
-        
-        Parameters:
-        -----------
-        feature_names : list, optional
-            Names of features
-            
-        Returns:
-        --------
-        list of tuples : (feature_name, coefficient, abs_coefficient)
-        """
+       
         if self.coef_ is None:
             raise ValueError("Model not fitted yet. Call fit() first.")
         
